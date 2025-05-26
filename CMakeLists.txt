@@ -29,11 +29,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 add_library(heap_guard STATIC "heap_guard.c")
-target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src)
+target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src/include)
 target_link_libraries(heap_guard PRIVATE mutex)
-target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/hashmap-src)
+target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/hashmap-src/include)
 target_link_libraries(heap_guard PRIVATE hashmap)
-target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/atomic-src)
+target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/atomic-src/include)
 target_link_libraries(heap_guard PRIVATE atomic)
 
 # Jemalloc
