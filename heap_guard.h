@@ -249,7 +249,7 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
     } else {
         hashmap_insert(
             heap_guards,
-            (void *)(uintptr_t)guard->ptr, // Use the pointer as the key
+            &guard->id, // Use the unique ID as the key
             guard // Store the guard as the value
         );
     }
