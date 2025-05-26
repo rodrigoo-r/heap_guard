@@ -116,6 +116,15 @@ typedef struct
 hashmap_t *heap_guards = NULL;
 
 /**
+ * @brief Global pointer to a hashmap tracking available keys for heap guards.
+ *
+ * This hashmap may be used to manage or recycle unique identifiers (keys)
+ * for heap_guard_t allocations, supporting efficient reuse and management
+ * of allocation IDs within the heap guard system.
+ */
+hashmap_t *available_keys = NULL;
+
+/**
  * @brief Frees a heap_guard_t allocation and its associated resources.
  *
  * This function releases the memory block managed by the given heap_guard_t,
@@ -171,6 +180,16 @@ inline void heap_destroy()
             drop_guard(&guard); // Free the guard and its resources
         }
     }
+
+    // Destroy the hashmap itself
+    hashmap_free(heap_guards);
+
+    // Destroy the available keys hashmap if it exists
+    if (available_keys != NULL)
+    {
+        hashmap_free(available_keys);
+        available_keys = NULL; // Reset the pointer to NULL
+    }
 }
 
 /**
@@ -204,11 +223,29 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
         return NULL; // Allocation failed
     }
 
+    // Find a unique ID for the guard
+    size_t available_id = 0;
+    if (available_keys != NULL && available_keys->count > 0)
+    {
+        // Get an iterator to the map
+        hashmap_iter_t iter = hashmap_iter_begin(available_keys);
+        const hash_entry_t *entry = hashmap_iter_next(&iter);
+        if (entry != NULL)
+        {
+            // Use the first available key as the ID
+            available_id = *(size_t *)entry->key; // Cast for C++ compatibility
+            hashmap_remove(available_keys, entry->key); // Remove it from available keys
+        } else {
+            // No available keys, use the current count as the ID
+            available_id = heap_guards ? heap_guards->count : 0;
+        }
+    }
+
     // Initialize metadata
     guard->allocated = size;
     guard->ref_count = 1; // Start with a reference count of 1
     guard->concurrent = is_concurrent; // Set the concurrency flag
-    guard->id = heap_guards->count; // Unique ID based on current count in the hashmap
+    guard->id = available_id; // Unique ID based on current count in the hashmap
 
     // Initialize the mutex if concurrency is enabled
     if (is_concurrent)
@@ -251,6 +288,18 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
             heap_guards,
             &guard->id, // Use the unique ID as the key
             guard // Store the guard as the value
+        );
+    }
+
+    // Initialize the available keys hashmap if it doesn't exist
+    if (available_keys == NULL)
+    {
+        available_keys = hashmap_new(
+            FLUENT_LIBC_HEAP_MAP_CAPACITY,
+            FLUENT_LIBC_HEAP_MAP_GROWTH_F,
+            NULL,
+            (hash_function_t)hash_int, // Cast for C++ compatibility
+            1 // Free keys on deletion
         );
     }
 
@@ -333,6 +382,13 @@ inline void lower_guard(heap_guard_t **guard_ptr)
         {
             mutex_unlock(guard->mutex);
         }
+
+        // Clone the ID for further reuse
+        size_t *id = (size_t *)malloc(sizeof(size_t));
+        memcpy(id, &guard->id, sizeof(size_t));
+
+        // Mark the ID as available in the available keys hashmap
+        hashmap_insert(available_keys, id, NULL); // Insert the ID with NULL value
 
         // Drop the guard and free its resources
         drop_guard(guard_ptr);
