@@ -403,20 +403,20 @@ inline void lower_guard(heap_guard_t **guard_ptr)
 }
 
 /**
- * @brief Extends the memory block managed by a heap_guard_t allocation.
+ * @brief Resizes the memory block managed by a heap_guard_t allocation.
  *
  * This function attempts to reallocate the memory block pointed to by the given
- * heap_guard_t structure, increasing its size by the specified amount. If the
- * allocation is concurrent, the associated mutex is locked before performing the
- * reallocation and unlocked afterward to ensure thread safety. On success, the
- * pointer and allocated size in the guard are updated.
+ * heap_guard_t structure to the specified new size. If the allocation is concurrent,
+ * the associated mutex is locked before performing the reallocation and unlocked
+ * afterward to ensure thread safety. On success, the pointer and allocated size
+ * in the guard are updated.
  *
- * @param guard Pointer to the heap_guard_t structure whose memory block is to be extended.
+ * @param guard Pointer to the heap_guard_t structure whose memory block is to be resized.
  *              Must not be NULL and must point to a valid allocation.
- * @param size  The number of bytes to add to the current allocation.
+ * @param size  The new size in bytes for the memory block.
  * @return      1 if the reallocation was successful, 0 otherwise.
  */
-inline int extend_guard(heap_guard_t *guard, const size_t size)
+inline int resize_guard(heap_guard_t *guard, const size_t size)
 {
     if (guard == NULL || guard->ptr == NULL)
     {
@@ -430,7 +430,7 @@ inline int extend_guard(heap_guard_t *guard, const size_t size)
     }
 
     // Reallocate the memory block to the new size
-    void *new_ptr = realloc(guard->ptr, guard->allocated + size);
+    void *new_ptr = realloc(guard->ptr, size);
 
     // Handle failure
     if (new_ptr == NULL)
@@ -446,7 +446,7 @@ inline int extend_guard(heap_guard_t *guard, const size_t size)
     }
 
     guard->ptr = new_ptr; // Update the pointer if realloc was successful
-    guard->allocated += size; // Update the allocated size
+    guard->allocated = size; // Update the allocated size
 
     // Unlock the mutex if it was locked
     if (guard->concurrent)
@@ -456,6 +456,26 @@ inline int extend_guard(heap_guard_t *guard, const size_t size)
 
     return 1; // Reallocation successful
 }
+
+/**
+ * @brief Extends the memory block managed by a heap_guard_t allocation.
+ *
+ * This function attempts to reallocate the memory block pointed to by the given
+ * heap_guard_t structure, increasing its size by the specified amount. If the
+ * allocation is concurrent, the associated mutex is locked before performing the
+ * reallocation and unlocked afterward to ensure thread safety. On success, the
+ * pointer and allocated size in the guard are updated.
+ *
+ * @param guard Pointer to the heap_guard_t structure whose memory block is to be extended.
+ *              Must not be NULL and must point to a valid allocation.
+ * @param size  The number of bytes to add to the current allocation.
+ * @return      1 if the reallocation was successful, 0 otherwise.
+ */
+inline int extend_guard(heap_guard_t *guard, const size_t size)
+{
+    return resize_guard(guard, guard->allocated + size);
+}
+
 
 // ============= FLUENT LIB C++ =============
 #if defined(__cplusplus)
