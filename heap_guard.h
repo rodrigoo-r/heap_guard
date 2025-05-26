@@ -69,6 +69,7 @@ extern "C"
 #endif
 #include <mutex.h> // fluent_libc
 #include <hash_map.h> // fluent_libc
+#include <atomic.h> // fluent_libc
 
 // ============= MACROS =============
 #ifndef FLUENT_LIBC_HEAP_MAP_CAPACITY // Define if not user-defined
@@ -102,8 +103,9 @@ typedef struct
     void *ptr;        // Pointer to the allocated memory
     size_t allocated; // Total bytes allocated
     size_t ref_count; // Reference count for the heap guard
-    mutex_t *mutex; // Optional mutex for thread safety
+    atomic_size_t concurrent_ref; // Atomic reference count for concurrent access
     int concurrent;   // Flag to indicate if the allocation is concurrent
+    int key_concurrent; // Flag to indicate if the key is concurrent
     size_t id; // Unique identifier for the allocation
 } heap_guard_t;
 
@@ -123,6 +125,7 @@ hashmap_t *heap_guards = NULL;
  * of allocation IDs within the heap guard system.
  */
 hashmap_t *available_keys = NULL;
+mutex_t *available_keys_mutex = NULL; // Mutex for thread safety of available keys
 
 /**
  * @brief Frees a heap_guard_t allocation and its associated resources.
@@ -143,12 +146,6 @@ inline void drop_guard(heap_guard_t **guard_ptr)
     if (guard->ptr != NULL)
     {
         free(guard->ptr); // Free the allocated memory block
-    }
-
-    if (guard->concurrent)
-    {
-        mutex_destroy(guard->mutex); // Destroy the mutex if it exists
-        free(guard->mutex); // Free the mutex memory
     }
 
     free(guard); // Free the heap_guard_t structure
@@ -190,6 +187,14 @@ inline void heap_destroy()
         hashmap_free(available_keys);
         available_keys = NULL; // Reset the pointer to NULL
     }
+
+    // Destroy the available keys mutex if it exists
+    if (available_keys_mutex != NULL)
+    {
+        mutex_destroy(available_keys_mutex); // Destroy the mutex
+        free(available_keys_mutex); // Free the mutex memory
+        available_keys_mutex = NULL; // Reset the pointer to NULL
+    }
 }
 
 /**
@@ -204,9 +209,10 @@ inline void heap_destroy()
  *
  * @param size The number of bytes to allocate for the memory block.
  * @param is_concurrent Non-zero to enable thread safety (allocates a mutex), zero otherwise.
+ * @param insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
  * @return Pointer to the initialized heap_guard_t structure, or NULL on failure.
  */
-inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
+inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent, const int insertion_concurrent)
 {
     // Allocate memory for the heap_guard_t structure
     heap_guard_t *guard = (heap_guard_t *)malloc(sizeof(heap_guard_t)); // Cast for C++ compatibility
@@ -236,7 +242,7 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
             available_id = *(size_t *)entry->key; // Cast for C++ compatibility
             hashmap_remove(available_keys, entry->key); // Remove it from available keys
         } else {
-            // No available keys, use the current count as the ID
+            // No available keys, use the count as the ID
             available_id = heap_guards ? heap_guards->count : 0;
         }
     }
@@ -250,19 +256,9 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
     // Initialize the mutex if concurrency is enabled
     if (is_concurrent)
     {
-        // Allocate a mutex for thread safety
-        mutex_t *mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
-        if (mutex == NULL)
-        {
-            free(guard->ptr); // Clean up if mutex allocation fails
-            free(guard);
-            return NULL; // Allocation failed
-        }
-
-        mutex_init(mutex); // Initialize the mutex
-        guard->mutex = mutex;
-    } else {
-        guard->mutex = NULL; // No mutex needed
+        atomic_size_t counter;
+        atomic_size_init(&counter, 1);
+        guard->concurrent_ref = counter; // Initialize the atomic reference count
     }
 
     // Check if we have to set automatic cleanup
@@ -271,6 +267,25 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
         // Register the cleanup function to be called at program exit
         atexit(heap_destroy);
         __fluent_libc_has_put_atexit_guard = 1; // Set the flag to indicate cleanup is registered
+    }
+
+    // Lock the mutex if insertion is concurrent
+    if (insertion_concurrent)
+    {
+        if (available_keys_mutex == NULL)
+        {
+            available_keys_mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
+            if (available_keys_mutex == NULL)
+            {
+                free(guard->ptr); // Clean up if mutex allocation fails
+                free(guard);
+                return NULL; // Allocation failed
+            }
+
+            mutex_init(available_keys_mutex); // Initialize the mutex
+        }
+
+        mutex_lock(available_keys_mutex); // Lock the mutex for thread safety
     }
 
     // Check if we have to initialize the linked list
@@ -303,6 +318,12 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
         );
     }
 
+    // Unlock the mutex if it was locked
+    if (insertion_concurrent && available_keys_mutex != NULL)
+    {
+        mutex_unlock(available_keys_mutex); // Unlock the mutex after insertion
+    }
+
     // Return the initialized heap guard
     return guard;
 }
@@ -324,19 +345,15 @@ inline void raise_guard(heap_guard_t *guard)
         return; // Nothing to raise
     }
 
-    // Check if we have a mutex
-    if (guard->concurrent)
-    {
-        mutex_lock(guard->mutex);
-    }
-
-    // Increment the reference count
-    guard->ref_count++;
-
     // Unlock the mutex if it was locked
     if (guard->concurrent)
     {
-        mutex_unlock(guard->mutex);
+        atomic_size_fetch_add(&guard->concurrent_ref, 1); // Increment the atomic reference count
+    }
+    else
+    {
+        // Increment the reference count
+        guard->ref_count++;
     }
 }
 
@@ -350,8 +367,10 @@ inline void raise_guard(heap_guard_t *guard)
  *
  * @param guard_ptr Double pointer to the heap_guard_t structure whose reference count is to be decremented.
  *                  If NULL or if *guard_ptr is NULL, the function does nothing.
+ *
+ * @param  insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
  */
-inline void lower_guard(heap_guard_t **guard_ptr)
+inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_concurrent)
 {
     // Check if the guard is freed
     if (guard_ptr == NULL || *guard_ptr == NULL)
@@ -362,26 +381,31 @@ inline void lower_guard(heap_guard_t **guard_ptr)
     // Get the pointer to the guard
     heap_guard_t *guard = *guard_ptr;
 
-    // Check if we have a mutex
+    // Check if we have a concurrent allocation
+    int free_memory = 0;
     if (guard->concurrent)
     {
-        mutex_lock(guard->mutex);
+        atomic_size_fetch_sub(&guard->concurrent_ref, 1); // Decrement the atomic reference count
+        free_memory = atomic_size_load(&guard->concurrent_ref) == 0; // Check if we need to free memory
+    }
+    else
+    {
+        // Increment the reference count
+        guard->ref_count--;
+        free_memory = guard->ref_count == 0; // Check if we need to free memory
     }
 
-    // Increment the reference count
-    guard->ref_count--;
-
     // Check if we have to drop the guard
-    if (guard->ref_count == 0)
+    if (free_memory == 1)
     {
+        // Lock the mutex if insertion is concurrent
+        if (insertion_concurrent && available_keys_mutex != NULL)
+        {
+            mutex_lock(available_keys_mutex); // Lock the mutex for thread safety
+        }
+
         // Remove the guard from the global hashmap
         hashmap_remove(heap_guards, &guard->id);
-
-        // Unlock the mutex right before freeing the guard
-        if (guard->concurrent)
-        {
-            mutex_unlock(guard->mutex);
-        }
 
         // Clone the ID for further reuse
         size_t *id = (size_t *)malloc(sizeof(size_t));
@@ -392,13 +416,12 @@ inline void lower_guard(heap_guard_t **guard_ptr)
 
         // Drop the guard and free its resources
         drop_guard(guard_ptr);
-        return; // Guard has been freed, exit the function
-    }
 
-    // Unlock the mutex if it was locked
-    if (guard->concurrent)
-    {
-        mutex_unlock(guard->mutex);
+        // Unlock the mutex
+        if (insertion_concurrent && available_keys_mutex != NULL)
+        {
+            mutex_unlock(available_keys_mutex); // Unlock the mutex after insertion
+        }
     }
 }
 
@@ -406,9 +429,7 @@ inline void lower_guard(heap_guard_t **guard_ptr)
  * @brief Resizes the memory block managed by a heap_guard_t allocation.
  *
  * This function attempts to reallocate the memory block pointed to by the given
- * heap_guard_t structure to the specified new size. If the allocation is concurrent,
- * the associated mutex is locked before performing the reallocation and unlocked
- * afterward to ensure thread safety. On success, the pointer and allocated size
+ * heap_guard_t structure to the specified new size. On success, the pointer and allocated size
  * in the guard are updated.
  *
  * @param guard Pointer to the heap_guard_t structure whose memory block is to be resized.
@@ -423,36 +444,18 @@ inline int resize_guard(heap_guard_t *guard, const size_t size)
         return 0; // Nothing to extend
     }
 
-    // Check if we have a mutex
-    if (guard->concurrent)
-    {
-        mutex_lock(guard->mutex);
-    }
-
     // Reallocate the memory block to the new size
     void *new_ptr = realloc(guard->ptr, size);
 
     // Handle failure
     if (new_ptr == NULL)
     {
-        // Release the mutex if it was locked
-        if (guard->concurrent)
-        {
-            mutex_unlock(guard->mutex);
-        }
-
         // Return false
         return 0; // Reallocation failed
     }
 
     guard->ptr = new_ptr; // Update the pointer if realloc was successful
     guard->allocated = size; // Update the allocated size
-
-    // Unlock the mutex if it was locked
-    if (guard->concurrent)
-    {
-        mutex_unlock(guard->mutex);
-    }
 
     return 1; // Reallocation successful
 }
@@ -462,9 +465,7 @@ inline int resize_guard(heap_guard_t *guard, const size_t size)
  *
  * This function attempts to reallocate the memory block pointed to by the given
  * heap_guard_t structure, increasing its size by the specified amount. If the
- * allocation is concurrent, the associated mutex is locked before performing the
- * reallocation and unlocked afterward to ensure thread safety. On success, the
- * pointer and allocated size in the guard are updated.
+ * allocation is concurrent, On success, the pointer and allocated size in the guard are updated.
  *
  * @param guard Pointer to the heap_guard_t structure whose memory block is to be extended.
  *              Must not be NULL and must point to a valid allocation.
