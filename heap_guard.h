@@ -67,9 +67,16 @@ extern "C"
 #else
 #       include <malloc.h> // Fallback to standard malloc
 #endif
-#include <fluent/mutex/mutex.h> // fluent_libc
-#include <fluent/hashmap/hashmap.h> // fluent_libc
-#include <fluent/atomic/atomic.h> // fluent_libc
+
+#ifndef FLUENT_LIBC_RELEASE
+#   include <mutex.h> // fluent_libc
+#   include <hashmap.h> // fluent_libc
+#   include <atomic.h> // fluent_libc
+#else
+#   include <fluent/mutex/mutex.h> // fluent_libc
+#   include <fluent/hashmap/hashmap.h> // fluent_libc
+#   include <fluent/atomic/atomic.h> // fluent_libc
+#endif
 
 // ============= MACROS =============
 #ifndef FLUENT_LIBC_HEAP_MAP_CAPACITY // Define if not user-defined
