@@ -28,7 +28,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-add_library(heap_guard STATIC "heap_guard.c")
+add_library(heap_guard STATIC "include/fluent/heap/heap_guard.c")
 target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src/include)
 target_link_libraries(heap_guard PRIVATE mutex)
 target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/hashmap-src/include)
