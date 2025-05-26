@@ -9,12 +9,21 @@ FetchContent_Declare(
     GIT_TAG        master
 )
 
+FetchContent_Declare(
+    hashmap
+    GIT_REPOSITORY https://github.com/rodrigoo-r/hashmap
+    GIT_TAG        master
+)
+
 FetchContent_MakeAvailable(mutex)
+FetchContent_MakeAvailable(hashmap)
 set(CMAKE_C_STANDARD 11)
 
 add_library(heap_guard STATIC "heap_guard.c")
 target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src)
 target_link_libraries(heap_guard PRIVATE mutex)
+target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/hashmap-src)
+target_link_libraries(heap_guard PRIVATE hashmap)
 
 # Jemalloc
 if(NOT WIN32) # Guard against Windows, falls to libc on Windows

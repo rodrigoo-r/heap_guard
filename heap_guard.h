@@ -58,6 +58,7 @@ extern "C"
 
 // ============= INCLUDES =============
 #include <mutex.h> // fluent_libc
+#include <hash_map.h> // fluent_libc
 #ifndef _WIN32
     // Detect jemalloc
 #   ifdef HAVE_JEMALLOC // CMake-defined macro
@@ -69,8 +70,17 @@ extern "C"
 #       include <malloc.h> // Fallback to standard malloc
 #endif
 
+// ============= MACROS =============
+#ifndef FLUENT_LIBC_HEAP_MAP_CAPACITY // Define if not user-defined
+#   define FLUENT_LIBC_HEAP_MAP_CAPACITY 1024 // Default capacity for the hashmap
+#endif
+
+#ifndef FLUENT_LIBC_HEAP_MAP_GROWTH_F // Define if not user-defined
+#   define FLUENT_LIBC_HEAP_MAP_GROWTH_F 1.5 // Growth factor for the hashmap
+#endif
+
 // Flag to check if automatic cleanup is enabled
-static int has_put_atexit_guard = 0;
+int __fluent_libc_has_put_atexit_guard = 0;
 
 /**
  * @brief Structure representing a guarded heap allocation.
@@ -85,6 +95,7 @@ static int has_put_atexit_guard = 0;
  *   ref_count  Reference count for the allocation, used for shared ownership.
  *   mutex      Optional mutex for thread safety (may be empty if not used).
  *   concurrent Flag indicating if the allocation is concurrent (1 for yes, 0 for no).
+ *   id         Unique identifier for the allocation.
  */
 typedef struct
 {
@@ -93,31 +104,16 @@ typedef struct
     size_t ref_count; // Reference count for the heap guard
     mutex_t *mutex; // Optional mutex for thread safety
     int concurrent;   // Flag to indicate if the allocation is concurrent
+    size_t id; // Unique identifier for the allocation
 } heap_guard_t;
 
 /**
- * @brief Singly-linked list node for managing heap_guard_t allocations.
+ * @brief Global pointer to the hashmap tracking all heap_guard_t allocations.
  *
- * This structure forms a doubly-linked list to track multiple guarded heap allocations.
- *
- * Members:
- *   guard  - The heap_guard_t instance representing the guarded allocation.
- *   next   - Pointer to the next node in the list.
+ * This hashmap is used for centralized management and cleanup of all
+ * heap-guarded allocations within the program.
  */
-static typedef struct heap_list_t
-{
-    heap_guard_t *guard; // Pointer to the heap_guard_t instance for this node
-    struct heap_list_t *next; // Pointer to the next heap guard in the list
-} heap_list_t;
-
-/**
- * @brief Global pointer to the head of the linked list of heap guards.
- *
- * This variable tracks all active heap_guard_t allocations for centralized
- * management and cleanup. It points to the first node in the doubly-linked list
- * of heap_list_t structures.
- */
-static heap_list_t *heap_guards = NULL; // Global pointer to the head of the linked list
+hashmap_t *heap_guards = NULL;
 
 /**
  * @brief Frees a heap_guard_t allocation and its associated resources.
@@ -160,15 +156,20 @@ inline void drop_guard(heap_guard_t **guard_ptr)
  */
 inline void heap_destroy()
 {
-    // Iterate through the linked list of heap guards and free each one
-    heap_list_t *current = heap_guards; // Start with the head of the list
+    // Iterate through the map
+    hashmap_iter_t iter = hashmap_iter_begin(heap_guards);
+    hash_entry_t* entry;
 
-    while (current != NULL)
-    {
-        heap_list_t *next = current->next; // Store the next node
-        drop_guard(&current->guard); // Drop the guard, freeing its resources
-        free(current); // Free the heap_list_t node itself
-        current = next; // Move to the next node
+    while ((entry = hashmap_iter_next(&iter)) != NULL) {
+        // Get the guard from the entry
+        heap_guard_t *guard = (heap_guard_t *)entry->value; // Cast for C++ compatibility
+
+        // Free the guard and its resources
+        if (guard != NULL)
+        {
+            free(entry->key); // Free the key memory
+            drop_guard(&guard); // Free the guard and its resources
+        }
     }
 }
 
@@ -207,6 +208,7 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
     guard->allocated = size;
     guard->ref_count = 1; // Start with a reference count of 1
     guard->concurrent = is_concurrent; // Set the concurrency flag
+    guard->id = heap_guards->count; // Unique ID based on current count in the hashmap
 
     // Initialize the mutex if concurrency is enabled
     if (is_concurrent)
@@ -227,40 +229,29 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent)
     }
 
     // Check if we have to set automatic cleanup
-    if (has_put_atexit_guard == 0)
+    if (__fluent_libc_has_put_atexit_guard == 0)
     {
         // Register the cleanup function to be called at program exit
         atexit(heap_destroy);
-        has_put_atexit_guard = 1; // Set the flag to indicate cleanup is registered
+        __fluent_libc_has_put_atexit_guard = 1; // Set the flag to indicate cleanup is registered
     }
 
     // Check if we have to initialize the linked list
     if (heap_guards == NULL)
     {
-        // Initialize the linked list with the new guard
-        heap_guards = (heap_list_t *)malloc(sizeof(heap_list_t)); // Allocate memory for the list node
-        if (heap_guards == NULL)
-        {
-            free(guard->ptr); // Clean up if list allocation fails
-            free(guard);
-            return NULL; // Allocation failed
-        }
-
-        heap_guards->guard = guard;
-        heap_guards->next = NULL; // No next node
+        heap_guards = hashmap_new(
+            FLUENT_LIBC_HEAP_MAP_CAPACITY,
+            FLUENT_LIBC_HEAP_MAP_GROWTH_F,
+            NULL,
+            (hash_function_t)hash_int, // Cast for C++ compatibility
+            0 // Don't free keys on deletion
+        );
     } else {
-        // Add the new guard to the end of the linked list
-        heap_list_t *new_node = (heap_list_t *)malloc(sizeof(heap_list_t));
-        if (new_node == NULL)
-        {
-            free(guard->ptr); // Clean up if new node allocation fails
-            free(guard);
-            return NULL; // Allocation failed
-        }
-
-        new_node->guard = guard; // Set the guard for the new node
-        new_node->next = heap_guards; // New node is at the end, so next is NULL
-        heap_guards = new_node; // Update the head of the list to point to the new node
+        hashmap_insert(
+            heap_guards,
+            (void *)(uintptr_t)guard->ptr, // Use the pointer as the key
+            guard // Store the guard as the value
+        );
     }
 
     // Return the initialized heap guard
@@ -334,30 +325,8 @@ inline void lower_guard(heap_guard_t **guard_ptr)
     // Check if we have to drop the guard
     if (guard->ref_count == 0)
     {
-        // Relocate the linked list
-        heap_list_t *current = heap_guards;
-        heap_list_t *prev = NULL;
-        while (current != NULL)
-        {
-            if (current->guard == guard)
-            {
-                // Found the guard in the list, remove it
-                if (prev == NULL)
-                {
-                    // It's the head of the list
-                    heap_guards = current->next; // Move head to next node
-                } else {
-                    // It's not the head, link previous to next
-                    prev->next = current->next;
-                }
-
-                free(current); // Free the list node
-                break; // Exit the loop after removing the guard
-            }
-
-            prev = current; // Move to the next node
-            current = current->next;
-        }
+        // Remove the guard from the global hashmap
+        hashmap_remove(heap_guards, &guard->id);
 
         // Unlock the mutex right before freeing the guard
         if (guard->concurrent)
