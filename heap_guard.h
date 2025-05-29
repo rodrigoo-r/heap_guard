@@ -122,7 +122,7 @@ typedef struct
  * This hashmap is used for centralized management and cleanup of all
  * heap-guarded allocations within the program.
  */
-hashmap_t *heap_guards = NULL;
+hashmap_t *__fluent_libc_impl_heap_guards = NULL;
 
 /**
  * @brief Global pointer to a hashmap tracking available keys for heap guards.
@@ -131,8 +131,8 @@ hashmap_t *heap_guards = NULL;
  * for heap_guard_t allocations, supporting efficient reuse and management
  * of allocation IDs within the heap guard system.
  */
-hashmap_t *available_keys = NULL;
-mutex_t *available_keys_mutex = NULL; // Mutex for thread safety of available keys
+hashmap_t *__fluent_libc_impl_available_keys = NULL;
+mutex_t *__fluent_libc_impl_available_keys_mutex = NULL; // Mutex for thread safety of available keys
 
 /**
  * @brief Frees a heap_guard_t allocation and its associated resources.
@@ -170,7 +170,7 @@ static inline void drop_guard(heap_guard_t **guard_ptr)
 static inline void heap_destroy()
 {
     // Iterate through the map
-    hashmap_iter_t iter = hashmap_iter_begin(heap_guards);
+    hashmap_iter_t iter = hashmap_iter_begin(__fluent_libc_impl_heap_guards);
     hash_entry_t* entry;
 
     while ((entry = hashmap_iter_next(&iter)) != NULL) {
@@ -186,21 +186,21 @@ static inline void heap_destroy()
     }
 
     // Destroy the hashmap itself
-    hashmap_free(heap_guards);
+    hashmap_free(__fluent_libc_impl_heap_guards);
 
     // Destroy the available keys hashmap if it exists
-    if (available_keys != NULL)
+    if (__fluent_libc_impl_available_keys != NULL)
     {
-        hashmap_free(available_keys);
-        available_keys = NULL; // Reset the pointer to NULL
+        hashmap_free(__fluent_libc_impl_available_keys);
+        __fluent_libc_impl_available_keys = NULL; // Reset the pointer to NULL
     }
 
     // Destroy the available keys mutex if it exists
-    if (available_keys_mutex != NULL)
+    if (__fluent_libc_impl_available_keys_mutex != NULL)
     {
-        mutex_destroy(available_keys_mutex); // Destroy the mutex
-        free(available_keys_mutex); // Free the mutex memory
-        available_keys_mutex = NULL; // Reset the pointer to NULL
+        mutex_destroy(__fluent_libc_impl_available_keys_mutex); // Destroy the mutex
+        free(__fluent_libc_impl_available_keys_mutex); // Free the mutex memory
+        __fluent_libc_impl_available_keys_mutex = NULL; // Reset the pointer to NULL
     }
 }
 
@@ -238,19 +238,19 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
 
     // Find a unique ID for the guard
     size_t available_id = 0;
-    if (available_keys != NULL && available_keys->count > 0)
+    if (__fluent_libc_impl_available_keys != NULL && __fluent_libc_impl_available_keys->count > 0)
     {
         // Get an iterator to the map
-        hashmap_iter_t iter = hashmap_iter_begin(available_keys);
+        hashmap_iter_t iter = hashmap_iter_begin(__fluent_libc_impl_available_keys);
         const hash_entry_t *entry = hashmap_iter_next(&iter);
         if (entry != NULL)
         {
             // Use the first available key as the ID
             available_id = *(size_t *)entry->key; // Cast for C++ compatibility
-            hashmap_remove(available_keys, entry->key); // Remove it from available keys
+            hashmap_remove(__fluent_libc_impl_available_keys, entry->key); // Remove it from available keys
         } else {
             // No available keys, use the count as the ID
-            available_id = heap_guards ? heap_guards->count : 0;
+            available_id = __fluent_libc_impl_heap_guards ? __fluent_libc_impl_heap_guards->count : 0;
         }
     }
 
@@ -279,26 +279,26 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     // Lock the mutex if insertion is concurrent
     if (insertion_concurrent)
     {
-        if (available_keys_mutex == NULL)
+        if (__fluent_libc_impl_available_keys_mutex == NULL)
         {
-            available_keys_mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
-            if (available_keys_mutex == NULL)
+            __fluent_libc_impl_available_keys_mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
+            if (__fluent_libc_impl_available_keys_mutex == NULL)
             {
                 free(guard->ptr); // Clean up if mutex allocation fails
                 free(guard);
                 return NULL; // Allocation failed
             }
 
-            mutex_init(available_keys_mutex); // Initialize the mutex
+            mutex_init(__fluent_libc_impl_available_keys_mutex); // Initialize the mutex
         }
 
-        mutex_lock(available_keys_mutex); // Lock the mutex for thread safety
+        mutex_lock(__fluent_libc_impl_available_keys_mutex); // Lock the mutex for thread safety
     }
 
     // Check if we have to initialize the linked list
-    if (heap_guards == NULL)
+    if (__fluent_libc_impl_heap_guards == NULL)
     {
-        heap_guards = hashmap_new(
+        __fluent_libc_impl_heap_guards = hashmap_new(
             FLUENT_LIBC_HEAP_MAP_CAPACITY,
             FLUENT_LIBC_HEAP_MAP_GROWTH_F,
             NULL,
@@ -307,16 +307,16 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
         );
     } else {
         hashmap_insert(
-            heap_guards,
+            __fluent_libc_impl_heap_guards,
             &guard->id, // Use the unique ID as the key
             guard // Store the guard as the value
         );
     }
 
     // Initialize the available keys hashmap if it doesn't exist
-    if (available_keys == NULL)
+    if (__fluent_libc_impl_available_keys == NULL)
     {
-        available_keys = hashmap_new(
+        __fluent_libc_impl_available_keys = hashmap_new(
             FLUENT_LIBC_HEAP_MAP_CAPACITY,
             FLUENT_LIBC_HEAP_MAP_GROWTH_F,
             NULL,
@@ -326,9 +326,9 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     }
 
     // Unlock the mutex if it was locked
-    if (insertion_concurrent && available_keys_mutex != NULL)
+    if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
     {
-        mutex_unlock(available_keys_mutex); // Unlock the mutex after insertion
+        mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex after insertion
     }
 
     // Return the initialized heap guard
@@ -406,28 +406,28 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
     if (free_memory == 1)
     {
         // Lock the mutex if insertion is concurrent
-        if (insertion_concurrent && available_keys_mutex != NULL)
+        if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
         {
-            mutex_lock(available_keys_mutex); // Lock the mutex for thread safety
+            mutex_lock(__fluent_libc_impl_available_keys_mutex); // Lock the mutex for thread safety
         }
 
         // Remove the guard from the global hashmap
-        hashmap_remove(heap_guards, &guard->id);
+        hashmap_remove(__fluent_libc_impl_heap_guards, &guard->id);
 
         // Clone the ID for further reuse
         size_t *id = (size_t *)malloc(sizeof(size_t));
         memcpy(id, &guard->id, sizeof(size_t));
 
         // Mark the ID as available in the available keys hashmap
-        hashmap_insert(available_keys, id, NULL); // Insert the ID with NULL value
+        hashmap_insert(__fluent_libc_impl_available_keys, id, NULL); // Insert the ID with NULL value
 
         // Drop the guard and free its resources
         drop_guard(guard_ptr);
 
         // Unlock the mutex
-        if (insertion_concurrent && available_keys_mutex != NULL)
+        if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
         {
-            mutex_unlock(available_keys_mutex); // Unlock the mutex after insertion
+            mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex after insertion
         }
     }
 }
