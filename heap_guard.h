@@ -479,7 +479,7 @@ static inline int resize_guard(heap_guard_t *guard, const size_t size)
  * @param size  The number of bytes to add to the current allocation.
  * @return      1 if the reallocation was successful, 0 otherwise.
  */
-inline int extend_guard(heap_guard_t *guard, const size_t size)
+static inline int extend_guard(heap_guard_t *guard, const size_t size)
 {
     return resize_guard(guard, guard->allocated + size);
 }
