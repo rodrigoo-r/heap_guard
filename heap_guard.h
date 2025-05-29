@@ -145,7 +145,7 @@ mutex_t *available_keys_mutex = NULL; // Mutex for thread safety of available ke
  * @param guard_ptr Double pointer to the heap_guard_t structure to be freed.
  *                  After the function returns, *guard_ptr will be set to NULL.
  */
-inline void drop_guard(heap_guard_t **guard_ptr)
+static inline void drop_guard(heap_guard_t **guard_ptr)
 {
     // Get the pointer to the guard
     heap_guard_t *guard = *guard_ptr;
@@ -167,7 +167,7 @@ inline void drop_guard(heap_guard_t **guard_ptr)
  * mutex, and finally freeing the list node itself. After calling this function,
  * all memory managed by the heap guard system will be released.
  */
-inline void heap_destroy()
+static inline void heap_destroy()
 {
     // Iterate through the map
     hashmap_iter_t iter = hashmap_iter_begin(heap_guards);
@@ -219,7 +219,7 @@ inline void heap_destroy()
  * @param insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
  * @return Pointer to the initialized heap_guard_t structure, or NULL on failure.
  */
-inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent, const int insertion_concurrent)
+static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent, const int insertion_concurrent)
 {
     // Allocate memory for the heap_guard_t structure
     heap_guard_t *guard = (heap_guard_t *)malloc(sizeof(heap_guard_t)); // Cast for C++ compatibility
@@ -345,7 +345,7 @@ inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent, cons
  * @param guard Pointer to the heap_guard_t structure whose reference count is to be incremented.
  *              If NULL, the function does nothing.
  */
-inline void raise_guard(heap_guard_t *guard)
+static inline void raise_guard(heap_guard_t *guard)
 {
     if (guard == NULL)
     {
@@ -377,7 +377,7 @@ inline void raise_guard(heap_guard_t *guard)
  *
  * @param  insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
  */
-inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_concurrent)
+static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_concurrent)
 {
     // Check if the guard is freed
     if (guard_ptr == NULL || *guard_ptr == NULL)
@@ -444,7 +444,7 @@ inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_concurrent
  * @param size  The new size in bytes for the memory block.
  * @return      1 if the reallocation was successful, 0 otherwise.
  */
-inline int resize_guard(heap_guard_t *guard, const size_t size)
+static inline int resize_guard(heap_guard_t *guard, const size_t size)
 {
     if (guard == NULL || guard->ptr == NULL)
     {
