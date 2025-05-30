@@ -105,7 +105,7 @@ int __fluent_libc_has_put_atexit_guard = 0;
  *   concurrent Flag indicating if the allocation is concurrent (1 for yes, 0 for no).
  *   id         Unique identifier for the allocation.
  */
-typedef struct
+typedef struct heap_guard_t
 {
     void *ptr;        // Pointer to the allocated memory
     size_t allocated; // Total bytes allocated
@@ -114,7 +114,22 @@ typedef struct
     int concurrent;   // Flag to indicate if the allocation is concurrent
     int key_concurrent; // Flag to indicate if the key is concurrent
     size_t id; // Unique identifier for the allocation
+    void (*destructor) // Destructor function pointer for cleanup
+        (const struct heap_guard_t *guard, int is_exit);
 } heap_guard_t;
+
+/**
+ * @brief Function pointer type for a heap guard destructor.
+ *
+ * This type defines a function that takes a pointer to a `heap_guard_t` (representing
+ * a heap-guarded allocation) and an integer flag `is_exit` indicating whether
+ * the destructor is being called during program exit (non-zero) or during normal operation (zero).
+ * The function is responsible for cleaning up resources associated with the heap guard.
+ *
+ * @param guard Pointer to the `heap_guard_t` structure to be destroyed.
+ * @param is_exit Non-zero if called during program exit, zero otherwise.
+ */
+typedef void (*heap_destructor_t)(const heap_guard_t *guard, int is_exit);
 
 #ifndef FLUENT_LIBC_HEAP_GUARD_MAP_DEFINED // Define if not user-defined
     DEFINE_HASHMAP(size_t, heap_guard_t *, _heap); // Define the hashmap for heap guards
@@ -156,11 +171,19 @@ mutex_t *__fluent_libc_impl_available_keys_mutex = NULL; // Mutex for thread saf
  *
  * @param guard_ptr Double pointer to the heap_guard_t structure to be freed.
  *                  After the function returns, *guard_ptr will be set to NULL.
+ * @param is_exit   Non-zero if called during program exit, zero otherwise.
  */
-static inline void drop_guard(heap_guard_t **guard_ptr)
+static inline void drop_guard(heap_guard_t **guard_ptr, const int is_exit)
 {
     // Get the pointer to the guard
     heap_guard_t *guard = *guard_ptr;
+
+    // Check if we have a destructor function
+    if (guard->destructor != NULL)
+    {
+        // Call the destructor function with the guard and is_exit flag
+        guard->destructor(guard, is_exit);
+    }
 
     if (guard->ptr != NULL)
     {
@@ -192,7 +215,7 @@ static inline void heap_destroy()
         // Free the guard and its resources
         if (guard != NULL)
         {
-            drop_guard(&guard); // Free the guard and its resources
+            drop_guard(&guard, 1); // Free the guard and its resources
         }
     }
 
@@ -228,9 +251,15 @@ static inline void heap_destroy()
  * @param size The number of bytes to allocate for the memory block.
  * @param is_concurrent Non-zero to enable thread safety (allocates a mutex), zero otherwise.
  * @param insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
+ * @param destructor Function pointer for a custom destructor to be called when the guard is freed.
  * @return Pointer to the initialized heap_guard_t structure, or NULL on failure.
  */
-static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurrent, const int insertion_concurrent)
+static inline heap_guard_t *heap_alloc(
+    const size_t size,
+    const int is_concurrent,
+    const int insertion_concurrent,
+    const heap_destructor_t destructor
+)
 {
     // Allocate memory for the heap_guard_t structure
     heap_guard_t *guard = (heap_guard_t *)malloc(sizeof(heap_guard_t)); // Cast for C++ compatibility
@@ -270,6 +299,7 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     guard->ref_count = 1; // Start with a reference count of 1
     guard->concurrent = is_concurrent; // Set the concurrency flag
     guard->id = available_id; // Unique ID based on current count in the hashmap
+    guard->destructor = destructor; // Set the destructor function pointer
 
     // Initialize the mutex if concurrency is enabled
     if (is_concurrent)
@@ -429,7 +459,7 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
         hashmap__heap_k_insert(__fluent_libc_impl_available_keys, guard->id, NULL); // Insert the ID with NULL value
 
         // Drop the guard and free its resources
-        drop_guard(guard_ptr);
+        drop_guard(guard_ptr, 0);
 
         // Unlock the mutex
         if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
