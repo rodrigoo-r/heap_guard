@@ -116,13 +116,25 @@ typedef struct
     size_t id; // Unique identifier for the allocation
 } heap_guard_t;
 
+#ifndef FLUENT_LIBC_HEAP_GUARD_MAP_DEFINED // Define if not user-defined
+    DEFINE_HASHMAP(size_t, heap_guard_t *, _heap); // Define the hashmap for heap guards
+    DEFINE_HASHMAP(size_t, void *, _heap_k); // Define the hashmap for the free keys
+#   define FLUENT_LIBC_HEAP_GUARD_MAP_DEFINED 1 // Flag to indicate heap guard map is defined
+#endif
+
+// ============= CMP FUNCTION =============
+static inline int size_t_cmp(const size_t a, const size_t b)
+{
+    return a == b;
+}
+
 /**
  * @brief Global pointer to the hashmap tracking all heap_guard_t allocations.
  *
  * This hashmap is used for centralized management and cleanup of all
  * heap-guarded allocations within the program.
  */
-hashmap_t *__fluent_libc_impl_heap_guards = NULL;
+hashmap__heap_t *__fluent_libc_impl_heap_guards = NULL;
 
 /**
  * @brief Global pointer to a hashmap tracking available keys for heap guards.
@@ -131,7 +143,7 @@ hashmap_t *__fluent_libc_impl_heap_guards = NULL;
  * for heap_guard_t allocations, supporting efficient reuse and management
  * of allocation IDs within the heap guard system.
  */
-hashmap_t *__fluent_libc_impl_available_keys = NULL;
+hashmap__heap_k_t *__fluent_libc_impl_available_keys = NULL;
 mutex_t *__fluent_libc_impl_available_keys_mutex = NULL; // Mutex for thread safety of available keys
 
 /**
@@ -170,28 +182,27 @@ static inline void drop_guard(heap_guard_t **guard_ptr)
 static inline void heap_destroy()
 {
     // Iterate through the map
-    hashmap_iter_t iter = hashmap_iter_begin(__fluent_libc_impl_heap_guards);
-    hash_entry_t* entry;
+    hashmap__heap_iter_t iter = hashmap__heap_iter_begin(__fluent_libc_impl_heap_guards);
+    hash__heap_entry_t* entry;
 
-    while ((entry = hashmap_iter_next(&iter)) != NULL) {
+    while ((entry = hashmap__heap_iter_next(&iter)) != NULL) {
         // Get the guard from the entry
-        heap_guard_t *guard = (heap_guard_t *)entry->value; // Cast for C++ compatibility
+        heap_guard_t *guard = entry->value;
 
         // Free the guard and its resources
         if (guard != NULL)
         {
-            free(entry->key); // Free the key memory
             drop_guard(&guard); // Free the guard and its resources
         }
     }
 
     // Destroy the hashmap itself
-    hashmap_free(__fluent_libc_impl_heap_guards);
+    hashmap__heap_free(__fluent_libc_impl_heap_guards);
 
     // Destroy the available keys hashmap if it exists
     if (__fluent_libc_impl_available_keys != NULL)
     {
-        hashmap_free(__fluent_libc_impl_available_keys);
+        hashmap__heap_k_free(__fluent_libc_impl_available_keys);
         __fluent_libc_impl_available_keys = NULL; // Reset the pointer to NULL
     }
 
@@ -241,13 +252,13 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     if (__fluent_libc_impl_available_keys != NULL && __fluent_libc_impl_available_keys->count > 0)
     {
         // Get an iterator to the map
-        hashmap_iter_t iter = hashmap_iter_begin(__fluent_libc_impl_available_keys);
-        const hash_entry_t *entry = hashmap_iter_next(&iter);
+        hashmap__heap_k_iter_t iter = hashmap__heap_k_iter_begin(__fluent_libc_impl_available_keys);
+        const hash__heap_k_entry_t *entry = hashmap__heap_k_iter_next(&iter);
         if (entry != NULL)
         {
             // Use the first available key as the ID
             available_id = *(size_t *)entry->key; // Cast for C++ compatibility
-            hashmap_remove(__fluent_libc_impl_available_keys, entry->key); // Remove it from available keys
+            hashmap__heap_k_remove(__fluent_libc_impl_available_keys, entry->key); // Remove it from available keys
         } else {
             // No available keys, use the count as the ID
             available_id = __fluent_libc_impl_heap_guards ? __fluent_libc_impl_heap_guards->count : 0;
@@ -298,17 +309,17 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     // Check if we have to initialize the linked list
     if (__fluent_libc_impl_heap_guards == NULL)
     {
-        __fluent_libc_impl_heap_guards = hashmap_new(
+        __fluent_libc_impl_heap_guards = hashmap__heap_new(
             FLUENT_LIBC_HEAP_MAP_CAPACITY,
             FLUENT_LIBC_HEAP_MAP_GROWTH_F,
             NULL,
-            (hash_function_t)hash_int, // Cast for C++ compatibility
-            0 // Don't free keys on deletion
+            (hash__heap_function_t)hash_int, // Cast for C++ compatibility
+            (hash__heap_cmp_t)size_t_cmp
         );
     } else {
-        hashmap_insert(
+        hashmap__heap_insert(
             __fluent_libc_impl_heap_guards,
-            &guard->id, // Use the unique ID as the key
+            guard->id, // Use the unique ID as the key
             guard // Store the guard as the value
         );
     }
@@ -316,12 +327,12 @@ static inline heap_guard_t *heap_alloc(const size_t size, const int is_concurren
     // Initialize the available keys hashmap if it doesn't exist
     if (__fluent_libc_impl_available_keys == NULL)
     {
-        __fluent_libc_impl_available_keys = hashmap_new(
+        __fluent_libc_impl_available_keys = hashmap__heap_k_new(
             FLUENT_LIBC_HEAP_MAP_CAPACITY,
             FLUENT_LIBC_HEAP_MAP_GROWTH_F,
             NULL,
-            (hash_function_t)hash_int, // Cast for C++ compatibility
-            1 // Free keys on deletion
+            (hash__heap_k_function_t)hash_int, // Cast for C++ compatibility
+            (hash__heap_k_cmp_t)size_t_cmp
         );
     }
 
@@ -412,14 +423,10 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
         }
 
         // Remove the guard from the global hashmap
-        hashmap_remove(__fluent_libc_impl_heap_guards, &guard->id);
-
-        // Clone the ID for further reuse
-        size_t *id = (size_t *)malloc(sizeof(size_t));
-        memcpy(id, &guard->id, sizeof(size_t));
+        hashmap__heap_remove(__fluent_libc_impl_heap_guards, guard->id);
 
         // Mark the ID as available in the available keys hashmap
-        hashmap_insert(__fluent_libc_impl_available_keys, id, NULL); // Insert the ID with NULL value
+        hashmap__heap_k_insert(__fluent_libc_impl_available_keys, guard->id, NULL); // Insert the ID with NULL value
 
         // Drop the guard and free its resources
         drop_guard(guard_ptr);
