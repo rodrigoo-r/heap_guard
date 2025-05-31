@@ -252,13 +252,16 @@ static inline void heap_destroy()
  * @param is_concurrent Non-zero to enable thread safety (allocates a mutex), zero otherwise.
  * @param insertion_concurrent Non-zero to enable concurrent insertion into the hashmap, zero otherwise.
  * @param destructor Function pointer for a custom destructor to be called when the guard is freed.
+ * @param default_ptr Pointer to a default value to be used instead of allocating memory.
+ *                    If NULL, a new memory block is allocated.
  * @return Pointer to the initialized heap_guard_t structure, or NULL on failure.
  */
 static inline heap_guard_t *heap_alloc(
     const size_t size,
     const int is_concurrent,
     const int insertion_concurrent,
-    const heap_destructor_t destructor
+    const heap_destructor_t destructor,
+    void *default_ptr
 )
 {
     // Allocate memory for the heap_guard_t structure
@@ -269,7 +272,7 @@ static inline heap_guard_t *heap_alloc(
     }
 
     // Initialize the guard structure
-    guard->ptr = malloc(size); // Allocate the actual memory block
+    guard->ptr = default_ptr ? default_ptr : malloc(size); // Allocate the actual memory block
     if (guard->ptr == NULL)
     {
         free(guard); // Clean up if allocation fails
