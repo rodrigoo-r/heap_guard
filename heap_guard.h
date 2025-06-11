@@ -418,6 +418,8 @@ extern "C"
                 }                                           \
             }                                               \
                                                             \
+            vector___fluent_libc_hpt_fl_##NAME##_push(__fluent_libc_hgt_##NAME##_free_list, tracker); \
+                                                            \
             drop_guard_##NAME(guard_ptr, 0);                \
                                                             \
             if (insertion_concurrent && __fluent_libc_impl_hg_##NAME##_mutex != NULL) \
