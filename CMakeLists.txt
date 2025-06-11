@@ -16,12 +16,6 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
     )
 
     FetchContent_Declare(
-            hashmap
-            GIT_REPOSITORY https://github.com/rodrigoo-r/hashmap
-            GIT_TAG        master
-    )
-
-    FetchContent_Declare(
             atomic
             GIT_REPOSITORY https://github.com/rodrigoo-r/atomic
             GIT_TAG        master
@@ -36,12 +30,9 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
     FetchContent_MakeAvailable(arena)
     FetchContent_MakeAvailable(atomic)
     FetchContent_MakeAvailable(mutex)
-    FetchContent_MakeAvailable(hashmap)
 
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src)
     target_link_libraries(heap_guard PRIVATE mutex)
-    target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/hashmap-src)
-    target_link_libraries(heap_guard PRIVATE hashmap)
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/atomic-src)
     target_link_libraries(heap_guard PRIVATE atomic)
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/arena-src)
