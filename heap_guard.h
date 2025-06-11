@@ -143,12 +143,6 @@ typedef struct __fluent_libc_heap_tracker_t
     struct __fluent_libc_heap_tracker_t *tail; // Pointer to the tail of the linked list for easy access
 } __fluent_libc_heap_tracker_t;
 
-// ============= CMP FUNCTION =============
-static inline int size_t_cmp(const size_t a, const size_t b)
-{
-    return a == b;
-}
-
 /**
  * @brief Global pointer to the hashmap tracking all heap_guard_t allocations.
  *
