@@ -403,9 +403,14 @@ extern "C"
                                                             \
             __fluent_libc_heap_##NAME##_tracker_t *tracker = (__fluent_libc_heap_##NAME##_tracker_t *)guard->__tracker; \
                                                             \
-            if (__fluent_libc_impl_heap_##NAME##_guards->tail == tracker)                   \
+            if (__fluent_libc_impl_heap_##NAME##_guards->tail == tracker) \
             {                                               \
-                tracker->tail = tracker->prev;              \
+                __fluent_libc_impl_heap_##NAME##_guards->tail = tracker->prev; \
+            }                                               \
+                                                            \
+            else if (__fluent_libc_impl_heap_##NAME##_guards == tracker) \
+            {                                               \
+                __fluent_libc_impl_heap_##NAME##_guards = tracker->next; \
             }                                               \
                                                             \
             if (tracker->prev != NULL)                      \
