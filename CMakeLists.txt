@@ -27,6 +27,13 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
             GIT_TAG        master
     )
 
+    FetchContent_Declare(
+            arena
+            GIT_REPOSITORY https://github.com/rodrigoo-r/arena
+            GIT_TAG        master
+    )
+
+    FetchContent_MakeAvailable(arena)
     FetchContent_MakeAvailable(atomic)
     FetchContent_MakeAvailable(mutex)
     FetchContent_MakeAvailable(hashmap)
@@ -37,6 +44,8 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
     target_link_libraries(heap_guard PRIVATE hashmap)
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/atomic-src)
     target_link_libraries(heap_guard PRIVATE atomic)
+    target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/arena-src)
+    target_link_libraries(heap_guard PRIVATE arena)
 endif ()
 
 # Jemalloc
