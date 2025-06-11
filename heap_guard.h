@@ -499,6 +499,12 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
         if (tracker->prev != NULL)
         {
             tracker->prev->next = tracker->next; // Link previous node to next
+
+            // Relocate the prev node of the next node
+            if (tracker->next != NULL)
+            {
+                tracker->next->prev = tracker->prev; // Link next node to previous
+            }
         }
 
         // Drop the guard and free its resources
