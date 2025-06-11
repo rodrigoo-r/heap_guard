@@ -81,12 +81,8 @@ extern "C"
 #endif
 
 // ============= MACROS =============
-#ifndef FLUENT_LIBC_HEAP_MAP_CAPACITY // Define if not user-defined
-#   define FLUENT_LIBC_HEAP_MAP_CAPACITY 1024 // Default capacity for the hashmap
-#endif
-
-#ifndef FLUENT_LIBC_HEAP_MAP_GROWTH_F // Define if not user-defined
-#   define FLUENT_LIBC_HEAP_MAP_GROWTH_F 1.5 // Growth factor for the hashmap
+#ifndef FLUENT_LIBC_HEAP_POOL_CAPACITY // Define if not user-defined
+#   define FLUENT_LIBC_HEAP_POOL_CAPACITY 50 // Default capacity for the hashmap
 #endif
 
 // Flag to check if automatic cleanup is enabled
@@ -276,12 +272,12 @@ static inline heap_guard_t *heap_alloc(
     // Check if the arena allocator is NULL
     if (__fluent_libc_hg_arena_allocator == NULL)
     {
-        __fluent_libc_hg_arena_allocator = arena_new(50, sizeof(heap_guard_t));
+        __fluent_libc_hg_arena_allocator = arena_new(FLUENT_LIBC_HEAP_POOL_CAPACITY, sizeof(heap_guard_t));
     }
 
     if (__fluent_libc_hg_heap_arena_allocator == NULL)
     {
-        __fluent_libc_hg_heap_arena_allocator = arena_new(50, sizeof(__fluent_libc_heap_tracker_t));
+        __fluent_libc_hg_heap_arena_allocator = arena_new(FLUENT_LIBC_HEAP_POOL_CAPACITY, sizeof(__fluent_libc_heap_tracker_t));
     }
 
     // Allocate memory for the heap_guard_t structure
