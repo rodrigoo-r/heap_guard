@@ -70,12 +70,10 @@ extern "C"
 
 #ifndef FLUENT_LIBC_RELEASE
 #   include <mutex.h> // fluent_libc
-#   include <hashmap.h> // fluent_libc
 #   include <atomic.h> // fluent_libc
 #   include <arena.h> // fluent_libc
 #else
 #   include <fluent/mutex/mutex.h> // fluent_libc
-#   include <fluent/hashmap/hashmap.h> // fluent_libc
 #   include <fluent/atomic/atomic.h> // fluent_libc
 #   include <fluent/arena/arena.h> // fluent_libc
 #endif
@@ -158,7 +156,7 @@ static inline int size_t_cmp(const size_t a, const size_t b)
  * heap-guarded allocations within the program.
  */
 __fluent_libc_heap_tracker_t *__fluent_libc_impl_heap_guards = NULL;
-mutex_t *__fluent_libc_impl_available_keys_mutex = NULL; // Mutex for thread safety of available keys
+mutex_t *__fluent_libc_impl_hg_mutex = NULL; // Mutex for thread safety of available keys
 
 // Global arena allocator for allocating heap guards
 arena_allocator_t *__fluent_libc_hg_arena_allocator = NULL;
@@ -234,12 +232,12 @@ static inline void heap_destroy()
         destroy_arena(__fluent_libc_hg_heap_arena_allocator);
     }
 
-    // Destroy the available keys mutex if it exists
-    if (__fluent_libc_impl_available_keys_mutex != NULL)
+    // Destroy the mutex if it exists
+    if (__fluent_libc_impl_hg_mutex != NULL)
     {
-        mutex_destroy(__fluent_libc_impl_available_keys_mutex); // Destroy the mutex
-        free(__fluent_libc_impl_available_keys_mutex); // Free the mutex memory
-        __fluent_libc_impl_available_keys_mutex = NULL; // Reset the pointer to NULL
+        mutex_destroy(__fluent_libc_impl_hg_mutex); // Destroy the mutex
+        free(__fluent_libc_impl_hg_mutex); // Free the mutex memory
+        __fluent_libc_impl_hg_mutex = NULL; // Reset the pointer to NULL
     }
 }
 
@@ -320,20 +318,20 @@ static inline heap_guard_t *heap_alloc(
     // Lock the mutex if insertion is concurrent
     if (insertion_concurrent)
     {
-        if (__fluent_libc_impl_available_keys_mutex == NULL)
+        if (__fluent_libc_impl_hg_mutex == NULL)
         {
-            __fluent_libc_impl_available_keys_mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
-            if (__fluent_libc_impl_available_keys_mutex == NULL)
+            __fluent_libc_impl_hg_mutex = (mutex_t *)malloc(sizeof(mutex_t)); // Cast for C++ compatibility
+            if (__fluent_libc_impl_hg_mutex == NULL)
             {
                 free(guard->ptr); // Clean up if mutex allocation fails
                 free(guard);
                 return NULL; // Allocation failed
             }
 
-            mutex_init(__fluent_libc_impl_available_keys_mutex); // Initialize the mutex
+            mutex_init(__fluent_libc_impl_hg_mutex); // Initialize the mutex
         }
 
-        mutex_lock(__fluent_libc_impl_available_keys_mutex); // Lock the mutex for thread safety
+        mutex_lock(__fluent_libc_impl_hg_mutex); // Lock the mutex for thread safety
     }
 
     // Check if we have to initialize the linked list
@@ -344,9 +342,9 @@ static inline heap_guard_t *heap_alloc(
         // Handle allocation failure
         if (__fluent_libc_impl_heap_guards == NULL)
         {
-            if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+            if (insertion_concurrent && __fluent_libc_impl_hg_mutex != NULL)
             {
-                mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex before returning
+                mutex_unlock(__fluent_libc_impl_hg_mutex); // Unlock the mutex before returning
             }
 
             free(guard->ptr); // Clean up if tracker allocation fails
@@ -368,9 +366,9 @@ static inline heap_guard_t *heap_alloc(
         // Handle allocation failure
         if (node == NULL)
         {
-            if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+            if (insertion_concurrent && __fluent_libc_impl_hg_mutex != NULL)
             {
-                mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex before returning
+                mutex_unlock(__fluent_libc_impl_hg_mutex); // Unlock the mutex before returning
             }
 
             free(guard->ptr); // Clean up if node allocation fails
@@ -401,9 +399,9 @@ static inline heap_guard_t *heap_alloc(
     }
 
     // Unlock the mutex if it was locked
-    if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+    if (insertion_concurrent && __fluent_libc_impl_hg_mutex != NULL)
     {
-        mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex after insertion
+        mutex_unlock(__fluent_libc_impl_hg_mutex); // Unlock the mutex after insertion
     }
 
     // Return the initialized heap guard
@@ -481,9 +479,9 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
     if (free_memory == 1)
     {
         // Lock the mutex if insertion is concurrent
-        if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+        if (insertion_concurrent && __fluent_libc_impl_hg_mutex != NULL)
         {
-            mutex_lock(__fluent_libc_impl_available_keys_mutex); // Lock the mutex for thread safety
+            mutex_lock(__fluent_libc_impl_hg_mutex); // Lock the mutex for thread safety
         }
 
         // Get the tracker from the guard
@@ -511,9 +509,9 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
         drop_guard(guard_ptr, 0);
 
         // Unlock the mutex
-        if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+        if (insertion_concurrent && __fluent_libc_impl_hg_mutex != NULL)
         {
-            mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex after insertion
+            mutex_unlock(__fluent_libc_impl_hg_mutex); // Unlock the mutex after insertion
         }
     }
 }
