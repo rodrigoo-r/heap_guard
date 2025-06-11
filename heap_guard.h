@@ -72,10 +72,12 @@ extern "C"
 #   include <mutex.h> // fluent_libc
 #   include <hashmap.h> // fluent_libc
 #   include <atomic.h> // fluent_libc
+#   include <arena.h> // fluent_libc
 #else
 #   include <fluent/mutex/mutex.h> // fluent_libc
 #   include <fluent/hashmap/hashmap.h> // fluent_libc
 #   include <fluent/atomic/atomic.h> // fluent_libc
+#   include <fluent/arena/arena.h> // fluent_libc
 #endif
 
 // ============= MACROS =============
@@ -113,9 +115,10 @@ typedef struct heap_guard_t
     atomic_size_t concurrent_ref; // Atomic reference count for concurrent access
     int concurrent;   // Flag to indicate if the allocation is concurrent
     int key_concurrent; // Flag to indicate if the key is concurrent
-    size_t id; // Unique identifier for the allocation
     void (*destructor) // Destructor function pointer for cleanup
         (const struct heap_guard_t *guard, int is_exit);
+    void *__tracker; // Pointer to the internal tracker for this guard
+                     // (Warning: should not be used directly by users)
 } heap_guard_t;
 
 /**
@@ -131,11 +134,20 @@ typedef struct heap_guard_t
  */
 typedef void (*heap_destructor_t)(const heap_guard_t *guard, int is_exit);
 
-#ifndef FLUENT_LIBC_HEAP_GUARD_MAP_DEFINED // Define if not user-defined
-    DEFINE_HASHMAP(size_t, heap_guard_t *, _heap); // Define the hashmap for heap guards
-    DEFINE_HASHMAP(size_t, void *, _heap_k); // Define the hashmap for the free keys
-#   define FLUENT_LIBC_HEAP_GUARD_MAP_DEFINED 1 // Flag to indicate heap guard map is defined
-#endif
+/**
+ * @brief Doubly-linked list node for tracking heap_guard_t allocations.
+ *
+ * This structure is used to maintain a linked list of all active heap_guard_t allocations,
+ * enabling centralized management and cleanup. Each node contains a pointer to a heap_guard_t,
+ * as well as pointers to the next and previous nodes in the list.
+ */
+typedef struct __fluent_libc_heap_tracker_t
+{
+    heap_guard_t *guard;              // Pointer to the heap guard structure
+    struct __fluent_libc_heap_tracker_t *next; // Pointer to the next tracker in the linked list
+    struct __fluent_libc_heap_tracker_t *prev; // Pointer to the previous tracker in the linked list
+    struct __fluent_libc_heap_tracker_t *tail; // Pointer to the tail of the linked list for easy access
+} __fluent_libc_heap_tracker_t;
 
 // ============= CMP FUNCTION =============
 static inline int size_t_cmp(const size_t a, const size_t b)
@@ -149,17 +161,12 @@ static inline int size_t_cmp(const size_t a, const size_t b)
  * This hashmap is used for centralized management and cleanup of all
  * heap-guarded allocations within the program.
  */
-hashmap__heap_t *__fluent_libc_impl_heap_guards = NULL;
-
-/**
- * @brief Global pointer to a hashmap tracking available keys for heap guards.
- *
- * This hashmap may be used to manage or recycle unique identifiers (keys)
- * for heap_guard_t allocations, supporting efficient reuse and management
- * of allocation IDs within the heap guard system.
- */
-hashmap__heap_k_t *__fluent_libc_impl_available_keys = NULL;
+__fluent_libc_heap_tracker_t *__fluent_libc_impl_heap_guards = NULL;
 mutex_t *__fluent_libc_impl_available_keys_mutex = NULL; // Mutex for thread safety of available keys
+
+// Global arena allocator for allocating heap guards
+arena_allocator_t *__fluent_libc_hg_arena_allocator = NULL;
+arena_allocator_t *__fluent_libc_hg_heap_arena_allocator = NULL;
 
 /**
  * @brief Frees a heap_guard_t allocation and its associated resources.
@@ -190,7 +197,6 @@ static inline void drop_guard(heap_guard_t **guard_ptr, const int is_exit)
         free(guard->ptr); // Free the allocated memory block
     }
 
-    free(guard); // Free the heap_guard_t structure
     *guard_ptr = NULL; // Set the pointer to NULL to avoid dangling pointers
 }
 
@@ -204,29 +210,32 @@ static inline void drop_guard(heap_guard_t **guard_ptr, const int is_exit)
  */
 static inline void heap_destroy()
 {
-    // Iterate through the map
-    hashmap__heap_iter_t iter = hashmap__heap_iter_begin(__fluent_libc_impl_heap_guards);
-    hash__heap_entry_t* entry;
+    // Iterate through the list
+    const __fluent_libc_heap_tracker_t *current = __fluent_libc_impl_heap_guards;
 
-    while ((entry = hashmap__heap_iter_next(&iter)) != NULL) {
+    while (current != NULL) {
         // Get the guard from the entry
-        heap_guard_t *guard = entry->value;
+        heap_guard_t *guard = current->guard;
 
         // Free the guard and its resources
         if (guard != NULL)
         {
             drop_guard(&guard, 1); // Free the guard and its resources
         }
+
+        // Move to the next node in the linked list
+        current = current->next;
     }
 
-    // Destroy the hashmap itself
-    hashmap__heap_free(__fluent_libc_impl_heap_guards);
-
-    // Destroy the available keys hashmap if it exists
-    if (__fluent_libc_impl_available_keys != NULL)
+    // Destroy the arena allocators
+    if (__fluent_libc_hg_arena_allocator)
     {
-        hashmap__heap_k_free(__fluent_libc_impl_available_keys);
-        __fluent_libc_impl_available_keys = NULL; // Reset the pointer to NULL
+        destroy_arena(__fluent_libc_hg_arena_allocator);
+    }
+
+    if (__fluent_libc_hg_heap_arena_allocator)
+    {
+        destroy_arena(__fluent_libc_hg_heap_arena_allocator);
     }
 
     // Destroy the available keys mutex if it exists
@@ -264,8 +273,19 @@ static inline heap_guard_t *heap_alloc(
     void *default_ptr
 )
 {
+    // Check if the arena allocator is NULL
+    if (__fluent_libc_hg_arena_allocator == NULL)
+    {
+        __fluent_libc_hg_arena_allocator = arena_new(50, sizeof(heap_guard_t));
+    }
+
+    if (__fluent_libc_hg_heap_arena_allocator == NULL)
+    {
+        __fluent_libc_hg_heap_arena_allocator = arena_new(50, sizeof(__fluent_libc_heap_tracker_t));
+    }
+
     // Allocate memory for the heap_guard_t structure
-    heap_guard_t *guard = (heap_guard_t *)malloc(sizeof(heap_guard_t)); // Cast for C++ compatibility
+    heap_guard_t *guard = (heap_guard_t *)arena_malloc(__fluent_libc_hg_arena_allocator); // Cast for C++ compatibility
     if (guard == NULL)
     {
         return NULL; // Allocation failed
@@ -279,29 +299,10 @@ static inline heap_guard_t *heap_alloc(
         return NULL; // Allocation failed
     }
 
-    // Find a unique ID for the guard
-    size_t available_id = 0;
-    if (__fluent_libc_impl_available_keys != NULL && __fluent_libc_impl_available_keys->count > 0)
-    {
-        // Get an iterator to the map
-        hashmap__heap_k_iter_t iter = hashmap__heap_k_iter_begin(__fluent_libc_impl_available_keys);
-        const hash__heap_k_entry_t *entry = hashmap__heap_k_iter_next(&iter);
-        if (entry != NULL)
-        {
-            // Use the first available key as the ID
-            available_id = *(size_t *)entry->key; // Cast for C++ compatibility
-            hashmap__heap_k_remove(__fluent_libc_impl_available_keys, entry->key); // Remove it from available keys
-        } else {
-            // No available keys, use the count as the ID
-            available_id = __fluent_libc_impl_heap_guards ? __fluent_libc_impl_heap_guards->count : 0;
-        }
-    }
-
     // Initialize metadata
     guard->allocated = size;
     guard->ref_count = 1; // Start with a reference count of 1
     guard->concurrent = is_concurrent; // Set the concurrency flag
-    guard->id = available_id; // Unique ID based on current count in the hashmap
     guard->destructor = destructor; // Set the destructor function pointer
 
     // Initialize the mutex if concurrency is enabled
@@ -342,31 +343,65 @@ static inline heap_guard_t *heap_alloc(
     // Check if we have to initialize the linked list
     if (__fluent_libc_impl_heap_guards == NULL)
     {
-        __fluent_libc_impl_heap_guards = hashmap__heap_new(
-            FLUENT_LIBC_HEAP_MAP_CAPACITY,
-            FLUENT_LIBC_HEAP_MAP_GROWTH_F,
-            NULL,
-            (hash__heap_function_t)hash_int, // Cast for C++ compatibility
-            (hash__heap_cmp_t)size_t_cmp
-        );
-    } else {
-        hashmap__heap_insert(
-            __fluent_libc_impl_heap_guards,
-            guard->id, // Use the unique ID as the key
-            guard // Store the guard as the value
-        );
-    }
+        // Allocate the tracker
+        __fluent_libc_impl_heap_guards = (__fluent_libc_heap_tracker_t *)arena_malloc(__fluent_libc_hg_heap_arena_allocator);
+        // Handle allocation failure
+        if (__fluent_libc_impl_heap_guards == NULL)
+        {
+            if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+            {
+                mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex before returning
+            }
 
-    // Initialize the available keys hashmap if it doesn't exist
-    if (__fluent_libc_impl_available_keys == NULL)
+            free(guard->ptr); // Clean up if tracker allocation fails
+            free(guard);
+            return NULL; // Allocation failed
+        }
+
+        // Initialize the tracker
+        guard->__tracker = __fluent_libc_impl_heap_guards; // Set the tracker pointer
+        __fluent_libc_impl_heap_guards->guard = guard; // Set the guard pointer
+        __fluent_libc_impl_heap_guards->tail = NULL; // Initialize tail to NULL
+        __fluent_libc_impl_heap_guards->next = NULL; // Initialize next pointer to NULL
+        __fluent_libc_impl_heap_guards->prev = NULL; // Initialize previous pointer to NULL
+    } else
     {
-        __fluent_libc_impl_available_keys = hashmap__heap_k_new(
-            FLUENT_LIBC_HEAP_MAP_CAPACITY,
-            FLUENT_LIBC_HEAP_MAP_GROWTH_F,
-            NULL,
-            (hash__heap_k_function_t)hash_int, // Cast for C++ compatibility
-            (hash__heap_k_cmp_t)size_t_cmp
-        );
+        // Create a new node
+        __fluent_libc_heap_tracker_t * node =(__fluent_libc_heap_tracker_t *)arena_malloc(__fluent_libc_hg_heap_arena_allocator);
+
+        // Handle allocation failure
+        if (node == NULL)
+        {
+            if (insertion_concurrent && __fluent_libc_impl_available_keys_mutex != NULL)
+            {
+                mutex_unlock(__fluent_libc_impl_available_keys_mutex); // Unlock the mutex before returning
+            }
+
+            free(guard->ptr); // Clean up if node allocation fails
+            free(guard);
+            return NULL; // Allocation failed
+        }
+
+        // Initialize the new node
+        guard->__tracker = node; // Set the tracker pointer to the new node
+        node->guard = guard; // Set the guard pointer
+        node->next = NULL; // Initialize next pointer to NULL
+
+        // Check if the linked list is empty
+        if (__fluent_libc_impl_heap_guards->tail == NULL)
+        {
+            // If empty, set both head and tail to the new node
+            __fluent_libc_impl_heap_guards->next = node;
+            __fluent_libc_impl_heap_guards->tail = node;
+            node->prev = NULL; // Set previous pointer to NULL
+        }
+        else
+        {
+            // If not empty, append the new node to the end of the list
+            __fluent_libc_impl_heap_guards->tail->next = node;
+            node->prev = __fluent_libc_impl_heap_guards->tail; // Set previous pointer to current tail
+            __fluent_libc_impl_heap_guards->tail = node; // Update tail to the new node
+        }
     }
 
     // Unlock the mutex if it was locked
@@ -455,11 +490,20 @@ static inline void lower_guard(heap_guard_t **guard_ptr, const int insertion_con
             mutex_lock(__fluent_libc_impl_available_keys_mutex); // Lock the mutex for thread safety
         }
 
-        // Remove the guard from the global hashmap
-        hashmap__heap_remove(__fluent_libc_impl_heap_guards, guard->id);
+        // Get the tracker from the guard
+        __fluent_libc_heap_tracker_t *tracker = (__fluent_libc_heap_tracker_t *)guard->__tracker;
 
-        // Mark the ID as available in the available keys hashmap
-        hashmap__heap_k_insert(__fluent_libc_impl_available_keys, guard->id, NULL); // Insert the ID with NULL value
+        // Handle case: the tracker is the tail node
+        if (tracker->tail == tracker)
+        {
+            tracker->tail = tracker->prev; // Update the tail to the previous node
+        }
+
+        // Relocate the pointers
+        if (tracker->prev != NULL)
+        {
+            tracker->prev->next = tracker->next; // Link previous node to next
+        }
 
         // Drop the guard and free its resources
         drop_guard(guard_ptr, 0);
