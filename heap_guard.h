@@ -91,7 +91,6 @@ extern "C"
         size_t ref_count;                                   \
         atomic_size_t concurrent_ref;                       \
         int concurrent;                                     \
-        int key_concurrent;                                 \
         void (*destructor)                                  \
             (const struct heap_guard_##NAME##_t *guard, int is_exit); \
         void *__tracker;                                    \
