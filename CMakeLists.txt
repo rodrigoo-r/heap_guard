@@ -27,9 +27,23 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
             GIT_TAG        master
     )
 
+    FetchContent_Declare(
+            vector
+            GIT_REPOSITORY https://github.com/rodrigoo-r/vector
+            GIT_TAG        master
+    )
+
+    FetchContent_Declare(
+            types
+            GIT_REPOSITORY https://github.com/rodrigoo-r/types
+            GIT_TAG        master
+    )
+
     FetchContent_MakeAvailable(arena)
     FetchContent_MakeAvailable(atomic)
     FetchContent_MakeAvailable(mutex)
+    FetchContent_MakeAvailable(vector)
+    FetchContent_MakeAvailable(types)
 
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/mutex-src)
     target_link_libraries(heap_guard PRIVATE mutex)
@@ -37,6 +51,10 @@ if(NOT FLUENT_LIBC_RELEASE) # Manually add libraries only if not in release mode
     target_link_libraries(heap_guard PRIVATE atomic)
     target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/arena-src)
     target_link_libraries(heap_guard PRIVATE arena)
+    target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/vector-src)
+    target_link_libraries(heap_guard PRIVATE vector)
+    target_include_directories(heap_guard PRIVATE ${CMAKE_BINARY_DIR}/_deps/types-src)
+    target_link_libraries(heap_guard PRIVATE types)
 endif ()
 
 # Jemalloc
