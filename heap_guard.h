@@ -12,43 +12,66 @@
 #define FLUENT_LIBC_HEAP_GUARD_H
 
 // ============= FLUENT LIB C =============
-// heap_guard_t API
-// ----------------------------------------
-// Smart heap allocation wrapper with optional thread-safety.
+// ## Heap Guard API
+// ---------------------------------------
+// A high-performance, reference-counted memory allocator designed for safe and efficient heap management.
 //
-// heap_guard_t wraps a memory block with:
-// - allocation metadata
-// - reference counting (manual shared ownership)
-// - optional mutex protection
-// - global cleanup with atexit()
+// The `heap_guard_t` system provides a robust wrapper around dynamically allocated memory, offering:
+// - **Reference counting** for manual shared ownership.
+// - **Thread-safety** via optional mutex protection (enabled with `is_concurrent` flag).
+// - **Global cleanup** through `atexit()` to prevent memory leaks.
+// - **Allocation metadata** to track memory usage and ownership.
+// - **Free list management** for efficient memory reuse.
+// - **Custom destructors** for user-defined cleanup logic.
 //
-// This system helps prevent:
-// - memory leaks
-// - unsafe free()
-// - race conditions (via `concurrent` flag and mutex)
+// ### Key Features
+// - Prevents memory leaks by tracking all allocations.
+// - Avoids unsafe `free()` calls through reference counting.
+// - Supports concurrent access with atomic operations and mutexes.
+// - Uses a linked list of heap guards for global cleanup.
+// - Integrates with `jemalloc` for optimized memory allocation (if available) or falls back to standard `malloc`.
 //
-// Linked list of heap guards is used for global cleanup tracking.
+// ### API Overview
+// - `heap_alloc`: Allocates memory and returns a heap guard.
+// - `raise_guard`: Increments the reference count for shared ownership.
+// - `lower_guard`: Decrements the reference count, freeing memory when it reaches zero.
+// - `extend_guard`: Resizes the allocated memory block.
+// - `drop_guard`: Immediately frees the memory and removes the guard.
+// - `heap_destroy`: Cleans up all tracked heap guards (called via `atexit()` or manually).
 //
-// Function Signatures:
-// ----------------------------------------
-// heap_guard_t *heap_alloc(size_t size, int is_concurrent);
-// void raise_guard(heap_guard_t *guard);
-// void lower_guard(heap_guard_t **guard_ptr);
-// int  extend_guard(heap_guard_t *guard, size_t size);
-// void drop_guard(heap_guard_t **guard_ptr);
-// void heap_destroy(void);
-//
-// Example:
-// ----------------------------------------
+// ### Example Usage
+// ```c
+// // Allocate 256 bytes with thread-safety enabled
 // heap_guard_t *guard = heap_alloc(256, 1);
-// raise_guard(guard);
-// lower_guard(&guard); // Automatically freed when ref count = 0
+// if (guard == NULL) {
+//     // Handle allocation failure
+//     return -1;
+// }
 //
-// ----------------------------------------
-// Initial revision: 2025-05-26
-// ----------------------------------------
-// Depends on: mutex.h, optional.h, stdlib.h, jemalloc (optional)
-// ----------------------------------------
+// // Share ownership by incrementing reference count
+// raise_guard(guard);
+//
+// // Access the memory
+// memset(guard->ptr, 0, guard->allocated);
+//
+// // Release ownership
+// lower_guard(&guard); // Memory freed if ref_count reaches 0
+// ```
+//
+// ### Thread-Safety Notes
+// - When `is_concurrent` is set, atomic operations and mutexes ensure thread-safe reference counting and guard management.
+// - Use `insertion_concurrent` for thread-safe insertion into the global guard list.
+// - Non-concurrent mode is faster but not thread-safe.
+//
+// ### Dependencies
+// - `mutex.h`, `atomic.h`, `arena.h`, `vector.h` (from fluent_libc or standard paths in release mode).
+// - `jemalloc.h` (if `HAVE_JEMALLOC` is defined via CMake) or `malloc.h` as fallback.
+// - `stdlib.h` for standard memory allocation functions.
+//
+// ### Initial Revision
+// - Created: 2025-05-26
+// - Author: Rodrigo R.
+// ---------------------------------------
 
 // ============= FLUENT LIB C++ =============
 #if defined(__cplusplus)
@@ -81,7 +104,7 @@ extern "C"
 #endif
 
 // ============= MACRO =============
-#define DEFINE_HEAP_GARD_T(V, NAME, ARENA_SIZE) \
+#define DEFINE_HEAP_GUARD(V, NAME, ARENA_SIZE) \
     int __fluent_libc_hg_##NAME##_has_put_atexit_guard = 0; \
                                                             \
     typedef struct heap_guard_##NAME##_t                    \
