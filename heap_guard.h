@@ -436,7 +436,7 @@ extern "C"
                 }                                           \
             }                                               \
                                                             \
-            vector___fluent_libc_hpt_fl_##NAME##_push(__fluent_libc_hgt_##NAME##_free_list, tracker); \
+            vec___fluent_libc_hpt_fl_##NAME##_push(__fluent_libc_hgt_##NAME##_free_list, tracker); \
                                                             \
             drop_guard_##NAME(guard_ptr, 0);                \
                                                             \
